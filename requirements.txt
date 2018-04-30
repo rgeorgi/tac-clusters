@@ -1,0 +1,7 @@
+pyaml
+bs4
+lxml
+spacy
+scikit-learn
+scipy
+gensim

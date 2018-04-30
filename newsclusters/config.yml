@@ -1,0 +1,7 @@
+# Path to the XML file defining the topics
+topic-path: /Users/rgeorgi/Documents/nicedata/GuidedSumm10_test_topics.xml
+aq1-path: /corpora/LDC/LDC02T31
+aq2-path: /corpora/LDC/LDC08T25
+gw-path: /corpora/LDC/LDC11T07
+nice-path: /Users/rgeorgi/Documents/nicedata
+vector-path: /Users/rgeorgi/Documents/nicedata/vectors
