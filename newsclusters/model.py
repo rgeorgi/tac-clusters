@@ -322,34 +322,43 @@ class GWFileBase(BaseCorpFile):
         parser for ENG-GW docs to retrieve the set
         of story IDs specified, and terminate once
         the list is exhausted.
+
+        :param story_ids: docIDs of the stories to be retrieved.
+        :return: dictionary of { doc_id : doc_content } form.
         """
-        cur_doc = ''
-        cur_id = None
+        cur_doc = ''  # keep track of document loop is currently processing
+        cur_id = None  # serves as the "inside-document" state.
         docs = {}
 
-        # ...because ENG-GW docs are GZipped
+        # Here, we take a SAX-like event driven approach to look
+        # for open/close <DOC> and </DOC> tags.
         with GzipFile(self.path, 'r') as gz:
             doc_data = gz.readlines()
-            for line in doc_data:
-                linestr = line.decode('utf-8')
+            for encoded_line in doc_data:
+                decoded_line = encoded_line.decode('utf-8')
 
                 if cur_id is not None:
-                    cur_doc += linestr
+                    cur_doc += decoded_line
 
-                if linestr.strip() == '</DOC>' and cur_id is not None:
-                    docs[cur_id] = cur_doc
+                # -- A) When a close tag is encountered...
+                #       AND we were inside a document we want to retrieve
+                if decoded_line.strip() == '</DOC>' and cur_id is not None:
+                    docs[cur_id] = cur_doc  # Save the contents to the return dict
                     cur_doc = ''
-                    cur_id = None
+                    cur_id = None  # Reset the state variables
 
+                    # Break from the loop if we have no more stories to retrieve
                     if not story_ids:
                         break
 
-                elif linestr.startswith('<DOC'):
-                    doc_id = re.search('id="([^"]+)"', linestr).group(1)
+                # -- B) When an open tag is encountered...
+                #       check to see if it's ID is one we want to keep.
+                elif decoded_line.startswith('<DOC'):
+                    doc_id = re.search('id="([^"]+)"', decoded_line).group(1)
                     if doc_id in story_ids:
-                        cur_doc += linestr
+                        cur_doc += decoded_line
                         cur_id = doc_id
-                        del story_ids[story_ids.index(doc_id)]
+                        del story_ids[story_ids.index(doc_id)]  # Pop the story from the list
 
         return docs
 
