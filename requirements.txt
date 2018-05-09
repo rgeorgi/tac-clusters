@@ -4,4 +4,4 @@ lxml
 spacy
 scikit-learn
 scipy
-gensim
+gensim>=3.2

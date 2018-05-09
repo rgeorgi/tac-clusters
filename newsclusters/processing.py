@@ -13,9 +13,11 @@ from collections import defaultdict
 
 
 from newsclusters.model import Guide, DocContent, AQ1FileBase, GWFileBase, BaseCorpFile
-from newsclusters.utils import text_or_none, load_config
+from newsclusters.utils import text_or_none, load_config, existsfile, process_story
 
 import spacy
+import gensim
+from gensim.models.doc2vec import Doc2Vec
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score
@@ -25,6 +27,7 @@ import numpy as np
 # Set up Logging
 # -------------------------------------------
 import logging
+logging.basicConfig(level=logging.DEBUG)
 LOG = logging.getLogger()
 
 # -------------------------------------------
@@ -35,6 +38,8 @@ TOPIC_CLUSTER = 'topic'
 
 GLOVE_VECTORS = 'glove'
 TFIDF_VECTORS = 'tfidf'
+WORD2VEC_VECTORS = 'word2vec'
+DOC2VEC_VECTORS = 'doc2vec'
 
 # -------------------------------------------
 # Matrices
@@ -82,14 +87,72 @@ def glove_matrix(doclist, nice_dir, vector_dir, spacy_model, overwrite=False):
             with open(vec_path, 'rb') as vec_f:
                 doc_vector = pickle.load(vec_f)
 
+        # Update the matrix row
         matrix[i] = doc_vector
+
     return matrix
+
+
+def doc_vector_from_word2vec(model: gensim.models.Word2Vec,
+                             td: gensim.models.doc2vec.TaggedDocument):
+    """
+    Given a word2vec model, create a document vector for the
+    :param model:
+    :param td:
+    :return:
+    """
+    word_vectors = []
+    for word in td.words:
+        try:
+            word_vectors.append(model[word])
+        except KeyError:
+            pass
+
+    if not word_vectors:
+        return np.zeros(shape=(model.vector_size,))
+    else:
+        return np.mean(word_vectors, axis=0)
+
+
+def gensim_matrix(doclist, nice_dir, vector_dir, d2v_model: gensim.models.Doc2Vec, overwrite=False):
+    """
+    Create vectors for documents using gensim-trained Word2Vec model.
+
+    :return:
+    """
+    os.makedirs(vector_dir, exist_ok=True)
+
+    # -------------------------------------------
+    # Initialize the cluster matrix
+    # -------------------------------------------
+    vec_size = d2v_model.vector_size
+    matrix = np.ndarray(shape=(len(doclist), vec_size),
+                        dtype=np.float32)
+
+    for i, path in enumerate(doclist):
+
+        doc_path = path.nice_path(nice_dir)
+        dc = DocContent.load(doc_path)
+        td = process_story(dc.text, i)
+
+        # If it's a doc2vec model, we can just use
+        #  "infer vector"
+        if isinstance(d2v_model, gensim.models.Doc2Vec):
+            matrix[i] = d2v_model.infer_vector(td.words)
+        else:
+            matrix[i] = doc_vector_from_word2vec(d2v_model, td)
+
+    return matrix
+
+
+
+
 
 
 
 def run_clustering_experiments(guide: Guide, nice_dir: str, vector_dir: str, overwrite: bool=False,
                                vector_type=TFIDF_VECTORS, cluster_type=TOPIC_CLUSTER,
-                               max_samples=None, num_runs=20):
+                               max_samples=None, num_runs=20, vec_path: str=None):
     """
     Run the semi-supervised clustering experiments.
 
@@ -114,7 +177,15 @@ def run_clustering_experiments(guide: Guide, nice_dir: str, vector_dir: str, ove
     # use the GloVe vectors.
     spacy_model = None
     if vector_type == GLOVE_VECTORS:
-        spacy_model = spacy.load('en_core_web_lg')
+        spacy_model = spacy.load('/home2/rgeorgi/python3/lib/python3.4/site-packages/en_core_web_lg/en_core_web_lg-2.0.0/')
+
+    w2v_model = None
+    if vector_type == WORD2VEC_VECTORS:
+        if os.path.splitext(vec_path)[1] in ['.bin', '.gz']:
+            w2v_model = gensim.models.KeyedVectors.load_word2vec_format(vec_path, binary=True)
+        else:
+            w2v_model = Doc2Vec.load(vec_path)
+            # w2v_model = gensim.models.Word2Vec.load(vec_path)
 
     # -------------------------------------------
     # Outer loop
@@ -142,8 +213,11 @@ def run_clustering_experiments(guide: Guide, nice_dir: str, vector_dir: str, ove
 
         if vector_type == TFIDF_VECTORS:
             matrix = tfidf_matrix(ordered_docs, nice_dir)
-        else:
-            matrix = glove_matrix(ordered_docs, nice_dir, vector_dir, spacy_model, overwrite=False)
+        elif vector_type == GLOVE_VECTORS:
+            matrix = glove_matrix(ordered_docs, nice_dir, vector_dir, spacy_model, overwrite=overwrite)
+        elif vector_type == WORD2VEC_VECTORS:
+            matrix = gensim_matrix(ordered_docs, nice_dir, vector_dir, w2v_model, overwrite=overwrite)
+
 
         # -------------------------------------------
         # Iterate over a different number of supervised
@@ -263,12 +337,12 @@ def init_cluster_dict(num_features: int):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
-    p.add_argument('--vector-type', default=TFIDF_VECTORS, choices=[TFIDF_VECTORS, GLOVE_VECTORS],
+    p.add_argument('--vector-type', default=TFIDF_VECTORS, choices=[TFIDF_VECTORS, GLOVE_VECTORS, WORD2VEC_VECTORS, DOC2VEC_VECTORS],
                    help='Choose between tfidf or GloVe to represent documents as vectors')
     p.add_argument('--cluster-type', default=TOPIC_CLUSTER, choices=[TOPIC_CLUSTER, CATEGORY_CLUSTER],
                    help='Choose between running experiments for clustering topics or categories as defined in the TREC data')
     p.add_argument('-c', '--config',
-                   default='config.yml',
+                   default='config.yml', type=existsfile,
                    help='Path to the config file that specifies paths for the corpora')
     p.add_argument('-f', '--force', action='store_true',
                    help='Force overwrite of already-generated vectors.')
@@ -276,12 +350,18 @@ if __name__ == '__main__':
                    help='Number of test runs to perform')
     p.add_argument('--max-samples', default=None, type=int,
                    help='Maximum number of supervised samples to use.')
+    p.add_argument('-i', '--input', help='Input vector file, if using gensim', type=existsfile)
 
     args = p.parse_args()
 
-    if not os.path.exists(args.config):
-        LOG.critical('Config file not found. Cannot proceed. Please specify with -c or --config')
+    # -------------------------------------------
+    # Do some error checking
+    # -------------------------------------------
+    if args.vector_type in [WORD2VEC_VECTORS, DOC2VEC_VECTORS] and not args.input:
+        LOG.critical("An existing gensim vector path must be specified with -i/--input to use the gensim vector type.")
         sys.exit(3)
+
+
 
     config = load_config(args.config)
 
@@ -290,4 +370,5 @@ if __name__ == '__main__':
     run_clustering_experiments(g, config.get('nice-path'), config.get('vector-path'),
                                vector_type=args.vector_type, cluster_type=args.cluster_type,
                                overwrite=args.force, max_samples=args.max_samples,
-                               num_runs=args.runs)
+                               num_runs=args.runs,
+                               vec_path=args.input)

@@ -215,10 +215,10 @@ class DocContent(object):
         """
         with open(path, 'r') as f:
             dc = DocContent()
-            data = BeautifulSoup(f.read())
+            data = BeautifulSoup(f.read(), 'lxml')
             dc.headline = text_or_none(data.find('headline'))
             dc.dateline = text_or_none(data.find('dateline'))
-            dc.doc_id = dc.find('doc')['id']
+            dc.doc_id = data.find('doc')['id']
             dc.sents = [p.text for p in data.find_all('p')]
         return dc
 
@@ -361,4 +361,5 @@ class GWFileBase(BaseCorpFile):
                         del story_ids[story_ids.index(doc_id)]  # Pop the story from the list
 
         return docs
+
 
